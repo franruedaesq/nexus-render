@@ -586,80 +586,16 @@ impl RenderEngine {
                 render_pass.set_pipeline(&self.render_pipeline);
 
                 for obj in self.scene_objects.values() {
-                    let (vbuf, ibuf, icount) = match &obj.kind {
-                        PrimitiveKind::Builtin(ptype) if ptype == "cube" => {
-                            (&cube_vertex_buffer, &cube_index_buffer, cube_index_count)
-                        }
-                        PrimitiveKind::Mesh(mesh) => {
-                            // Upload mesh buffers per-draw (allocated once per object).
-                            let vb = self.device.create_buffer_init(
-                                &wgpu::util::BufferInitDescriptor {
-                                    label: Some("mesh_vertices"),
-                                    contents: &mesh.vertex_bytes,
-                                    usage: wgpu::BufferUsages::VERTEX,
-                                },
-                            );
-                            let ib = self.device.create_buffer_init(
-                                &wgpu::util::BufferInitDescriptor {
-                                    label: Some("mesh_indices"),
-                                    contents: &mesh.index_bytes,
-                                    usage: wgpu::BufferUsages::INDEX,
-                                },
-                            );
-                            // Cannot return local references; fall through to draw below.
-                            let normal_mat = obj.transform.inverse().transpose();
-                            let model_bytes = model_to_bytes(&obj.transform, &normal_mat);
-                            let model_buffer = self.device.create_buffer_init(
-                                &wgpu::util::BufferInitDescriptor {
-                                    label: Some("model_uniform"),
-                                    contents: &model_bytes,
-                                    usage: wgpu::BufferUsages::UNIFORM,
-                                },
-                            );
-                            let bind_group =
-                                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                                    label: Some("main_bind_group"),
-                                    layout: &self.bind_group_layout,
-                                    entries: &[
-                                        wgpu::BindGroupEntry {
-                                            binding: 0,
-                                            resource: camera_buffer.as_entire_binding(),
-                                        },
-                                        wgpu::BindGroupEntry {
-                                            binding: 1,
-                                            resource: model_buffer.as_entire_binding(),
-                                        },
-                                        wgpu::BindGroupEntry {
-                                            binding: 2,
-                                            resource: light_buffer.as_entire_binding(),
-                                        },
-                                    ],
-                                });
-                            render_pass.set_vertex_buffer(0, vb.slice(..));
-                            render_pass.set_index_buffer(
-                                ib.slice(..),
-                                wgpu::IndexFormat::Uint16,
-                            );
-                            render_pass.set_bind_group(0, &bind_group, &[]);
-                            render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
-                            continue;
-                        }
-                        // Skip unknown builtin types.
-                        _ => continue,
-                    };
-
-                    // Compute the normal matrix: transpose(inverse(model)).
+                    // Build the per-object model uniform buffer and bind group.
                     let normal_mat = obj.transform.inverse().transpose();
-                    let model_uniform_bytes = model_to_bytes(&obj.transform, &normal_mat);
-
+                    let model_bytes = model_to_bytes(&obj.transform, &normal_mat);
                     let model_buffer =
                         self.device
                             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                                 label: Some("model_uniform"),
-                                contents: &model_uniform_bytes,
+                                contents: &model_bytes,
                                 usage: wgpu::BufferUsages::UNIFORM,
                             });
-
                     let bind_group =
                         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("main_bind_group"),
@@ -679,11 +615,45 @@ impl RenderEngine {
                                 },
                             ],
                         });
-
-                    render_pass.set_vertex_buffer(0, vbuf.slice(..));
-                    render_pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint16);
                     render_pass.set_bind_group(0, &bind_group, &[]);
-                    render_pass.draw_indexed(0..icount, 0, 0..1);
+
+                    match &obj.kind {
+                        PrimitiveKind::Builtin(ptype) if ptype == "cube" => {
+                            render_pass.set_vertex_buffer(0, cube_vertex_buffer.slice(..));
+                            render_pass.set_index_buffer(
+                                cube_index_buffer.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            render_pass.draw_indexed(0..cube_index_count, 0, 0..1);
+                        }
+                        PrimitiveKind::Mesh(mesh) => {
+                            // Upload mesh vertex/index data each frame.  Like the cube
+                            // geometry buffers above, these are transient per-frame
+                            // uploads kept consistent with the existing rendering approach.
+                            let vb = self.device.create_buffer_init(
+                                &wgpu::util::BufferInitDescriptor {
+                                    label: Some("mesh_vertices"),
+                                    contents: &mesh.vertex_bytes,
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                },
+                            );
+                            let ib = self.device.create_buffer_init(
+                                &wgpu::util::BufferInitDescriptor {
+                                    label: Some("mesh_indices"),
+                                    contents: &mesh.index_bytes,
+                                    usage: wgpu::BufferUsages::INDEX,
+                                },
+                            );
+                            render_pass.set_vertex_buffer(0, vb.slice(..));
+                            render_pass.set_index_buffer(
+                                ib.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                        }
+                        // Skip unknown builtin types.
+                        _ => {}
+                    }
                 }
             }
         }
