@@ -29,6 +29,25 @@ export declare class RenderEngine {
    */
   setTransform(id: string, position: Array<number>, rotation: Array<number>): void
   /**
+   * Step 5 / 6: Set the camera for the next `renderRaw` call.
+   *
+   * Uses a right-handed coordinate system (Three.js / OpenGL convention):
+   * +X is right, +Y is up, +Z points toward the viewer.
+   *
+   * @param position   - `[x, y, z]` eye position in world space.
+   * @param target     - `[x, y, z]` look-at point in world space.
+   * @param fovDegrees - Vertical field-of-view in degrees.
+   */
+  setCamera(position: Array<number>, target: Array<number>, fovDegrees: number): void
+  /**
+   * Step 6: Add a directional light to the scene.
+   *
+   * @param direction - `[x, y, z]` direction the light travels (from source toward scene).
+   *                    Matches Three.js `DirectionalLight` convention.
+   * @param intensity - Light intensity scalar (recommended range 0.0 – 1.0).
+   */
+  addDirectionalLight(direction: Array<number>, intensity: number): void
+  /**
    * Step 4: Render the current scene and return raw RGBA pixel data.
    * @param cameraId - Reserved for future use; pass any string (e.g. `"default"`).
    * @returns A `Uint8Array` of length `width * height * 4` in RGBA byte order.
