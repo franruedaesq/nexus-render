@@ -1,6 +1,6 @@
 {
   "name": "nexus-render",
-  "private": true,
+  "private": false,
   "workspaces": [
     "packages/core"
   ],

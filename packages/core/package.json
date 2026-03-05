@@ -1,6 +1,6 @@
 {
   "name": "@nexus-render/core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "High-performance headless 3D rendering library for Node.js (Rust/wgpu via napi-rs)",
   "main": "index.js",
   "types": "index.d.ts",
@@ -56,13 +56,15 @@
   "napi": {
     "binaryName": "nexus-render-core",
     "targets": [
-      "x86_64-unknown-linux-gnu"
+      "x86_64-unknown-linux-gnu",
+      "aarch64-apple-darwin"
     ]
   },
   "engines": {
     "node": ">= 18"
   },
   "optionalDependencies": {
-    "@nexus-render/core-linux-x64-gnu": "0.1.1"
+    "@nexus-render/core-linux-x64-gnu": "0.1.2",
+    "@nexus-render/core-darwin-arm64": "0.1.2"
   }
 }

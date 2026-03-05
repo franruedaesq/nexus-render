@@ -762,7 +762,7 @@ async fn init_wgpu(enable_gpu: bool) -> Result<(wgpu::Device, wgpu::Queue), Stri
     let backends = std::env::var("WGPU_BACKEND")
         .ok()
         .map(|s| wgpu::Backends::from_comma_list(&s))
-        .unwrap_or_else(|| wgpu::Backends::VULKAN | wgpu::Backends::GL);
+        .unwrap_or_else(wgpu::Backends::all);
 
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends,
@@ -776,15 +776,38 @@ async fn init_wgpu(enable_gpu: bool) -> Result<(wgpu::Device, wgpu::Queue), Stri
         wgpu::PowerPreference::None
     };
 
-    // `force_fallback_adapter` forces wgpu to use a software renderer.
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference,
-            force_fallback_adapter: !enable_gpu,
-            compatible_surface: None, // headless – no window surface
-        })
-        .await
-        .map_err(|e| format!("No suitable wgpu adapter found (ensure a Vulkan driver such as lavapipe is installed): {e}"))?;
+    // Try software fallback first when GPU is not requested; if no fallback
+    // adapter exists (e.g. macOS Metal has no software adapter), retry with
+    // the default hardware adapter.
+    let adapter = if !enable_gpu {
+        match instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference,
+                force_fallback_adapter: true,
+                compatible_surface: None,
+            })
+            .await
+        {
+            Ok(adapter) => adapter,
+            Err(_) => instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference,
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                })
+                .await
+                .map_err(|e| format!("No suitable wgpu adapter found: {e}"))?,
+        }
+    } else {
+        instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+            })
+            .await
+            .map_err(|e| format!("No suitable wgpu adapter found: {e}"))?
+    };
 
     let (device, queue) = adapter
         .request_device(
