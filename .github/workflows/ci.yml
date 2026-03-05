@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'copilot/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    name: Build & Test (Linux x64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install Vulkan software renderer (lavapipe)
+        run: sudo apt-get install -y mesa-vulkan-drivers
+
+      - name: Install @napi-rs/cli
+        run: npm install -g @napi-rs/cli
+
+      - name: Install Node.js dependencies
+        working-directory: packages/core
+        run: npm install
+
+      - name: Build native module (debug)
+        working-directory: packages/core
+        run: napi build --platform
+
+      - name: Run Jest tests
+        working-directory: packages/core
+        run: npm test
