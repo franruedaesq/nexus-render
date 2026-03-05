@@ -1,5 +1,8 @@
 #![deny(clippy::all)]
 
+mod world;
+use world::PhysicsError;
+
 use std::collections::HashMap;
 
 use napi::bindgen_prelude::{Float32Array, Uint8Array};
@@ -107,7 +110,7 @@ impl RenderEngine {
     #[napi(constructor)]
     pub fn new(options: RenderEngineOptions) -> napi::Result<Self> {
         let (device, queue) = pollster::block_on(init_wgpu(options.enable_gpu))
-            .map_err(|e| napi::Error::from_reason(format!("wgpu init failed: {e}")))?;
+            .map_err(|e: PhysicsError| napi::Error::from_reason(format!("wgpu init failed: {e}")))?;
 
         let (render_pipeline, bind_group_layout) = build_render_pipeline(&device);
 
@@ -137,15 +140,15 @@ impl RenderEngine {
         self.height
     }
 
-    /// Step 3: Add a primitive to the scene and return its unique string ID.
+    /// Step 3: Add a primitive to the scene and return its unique numeric entity ID.
     ///
     /// # Arguments
     /// * `primitive_type` – One of `"cube"`, `"sphere"`, etc.
     ///
     /// # Returns
-    /// A unique string ID that can be passed to `setTransform`.
+    /// A unique `u32` entity ID that can be passed to `setTransform`.
     #[napi]
-    pub fn add_primitive(&mut self, primitive_type: String) -> String {
+    pub fn add_primitive(&mut self, primitive_type: String) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
         self.scene_objects.insert(
@@ -155,40 +158,33 @@ impl RenderEngine {
                 transform: glam::Mat4::IDENTITY,
             },
         );
-        id.to_string()
+        id
     }
 
     /// Step 3: Update the world-space transform of an existing scene object.
     ///
     /// # Arguments
-    /// * `id`       – The string ID returned by `addPrimitive`.
+    /// * `id`       – The numeric entity ID returned by `addPrimitive` or `loadModel`.
     /// * `position` – `[x, y, z]` translation.
     /// * `rotation` – `[x, y, z, w]` unit quaternion (matches Three.js `Quaternion` component order).
     #[napi]
     pub fn set_transform(
         &mut self,
-        id: String,
+        id: u32,
         position: Vec<f64>,
         rotation: Vec<f64>,
     ) -> napi::Result<()> {
-        let id_num: u32 = id
-            .parse()
-            .map_err(|_| napi::Error::from_reason(format!("Invalid primitive ID: \"{id}\"")))?;
-
         if position.len() != 3 {
-            return Err(napi::Error::from_reason(
-                "position must have exactly 3 components [x, y, z]",
-            ));
+            return Err(PhysicsError::InvalidPosition.into());
         }
         if rotation.len() != 4 {
-            return Err(napi::Error::from_reason(
-                "rotation must have exactly 4 components [x, y, z, w]",
-            ));
+            return Err(PhysicsError::InvalidRotation.into());
         }
 
-        let obj = self.scene_objects.get_mut(&id_num).ok_or_else(|| {
-            napi::Error::from_reason(format!("Scene object not found for ID: \"{id}\""))
-        })?;
+        let obj = self
+            .scene_objects
+            .get_mut(&id)
+            .ok_or(PhysicsError::EntityNotFound(id))?;
 
         let pos = glam::Vec3::new(position[0] as f32, position[1] as f32, position[2] as f32);
         // Normalize the quaternion to ensure a pure rotation with no scaling artefacts.
@@ -223,14 +219,10 @@ impl RenderEngine {
         fov_degrees: f64,
     ) -> napi::Result<()> {
         if position.len() != 3 {
-            return Err(napi::Error::from_reason(
-                "position must have exactly 3 components [x, y, z]",
-            ));
+            return Err(PhysicsError::InvalidPosition.into());
         }
         if target.len() != 3 {
-            return Err(napi::Error::from_reason(
-                "target must have exactly 3 components [x, y, z]",
-            ));
+            return Err(PhysicsError::InvalidPosition.into());
         }
         self.camera = CameraState {
             position: glam::Vec3::new(
@@ -257,9 +249,7 @@ impl RenderEngine {
         intensity: f64,
     ) -> napi::Result<()> {
         if direction.len() != 3 {
-            return Err(napi::Error::from_reason(
-                "direction must have exactly 3 components [x, y, z]",
-            ));
+            return Err(PhysicsError::InvalidDirection.into());
         }
         let dir = glam::Vec3::new(
             direction[0] as f32,
@@ -288,29 +278,29 @@ impl RenderEngine {
     /// * `file_path` – Absolute or relative path to a `.gltf` or `.glb` file.
     ///
     /// # Returns
-    /// A unique string ID (same format as `addPrimitive`) that can be passed to
+    /// A unique `u32` entity ID (same as `addPrimitive`) that can be passed to
     /// `setTransform`.
     #[napi]
-    pub fn load_model(&mut self, file_path: String) -> napi::Result<String> {
+    pub fn load_model(&mut self, file_path: String) -> napi::Result<u32> {
         let (document, buffers, _images) = gltf::import(&file_path)
-            .map_err(|e| napi::Error::from_reason(format!("Failed to load GLTF file \"{file_path}\": {e}")))?;
+            .map_err(|e| PhysicsError::AssetLoadError(format!("Failed to load GLTF file \"{file_path}\": {e}")))?;
 
         let mesh = document
             .meshes()
             .next()
-            .ok_or_else(|| napi::Error::from_reason("GLTF file contains no meshes"))?;
+            .ok_or_else(|| PhysicsError::AssetLoadError("GLTF file contains no meshes".to_string()))?;
 
         let primitive = mesh
             .primitives()
             .next()
-            .ok_or_else(|| napi::Error::from_reason("GLTF mesh contains no primitives"))?;
+            .ok_or_else(|| PhysicsError::AssetLoadError("GLTF mesh contains no primitives".to_string()))?;
 
         let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
 
         // Extract positions (required).
         let positions: Vec<[f32; 3]> = reader
             .read_positions()
-            .ok_or_else(|| napi::Error::from_reason("GLTF primitive has no POSITION attribute"))?
+            .ok_or_else(|| PhysicsError::AssetLoadError("GLTF primitive has no POSITION attribute".to_string()))?
             .collect();
 
         // Extract normals; if absent, default to +Y (flat normal).
@@ -356,7 +346,7 @@ impl RenderEngine {
                 transform: glam::Mat4::IDENTITY,
             },
         );
-        Ok(id.to_string())
+        Ok(id)
     }
 
     /// Step 4 / 5: Render the current scene and return the raw RGBA pixel data.
@@ -766,7 +756,7 @@ impl RenderEngine {
 }
 
 /// Initialize a headless wgpu device.
-async fn init_wgpu(enable_gpu: bool) -> Result<(wgpu::Device, wgpu::Queue), String> {
+async fn init_wgpu(enable_gpu: bool) -> Result<(wgpu::Device, wgpu::Queue), PhysicsError> {
     // On Linux without a display server we need the Vulkan backend.
     // `WGPU_BACKEND` env-var can override this at runtime.
     let backends = std::env::var("WGPU_BACKEND")
@@ -794,7 +784,7 @@ async fn init_wgpu(enable_gpu: bool) -> Result<(wgpu::Device, wgpu::Queue), Stri
             compatible_surface: None, // headless – no window surface
         })
         .await
-        .map_err(|e| format!("No suitable wgpu adapter found (ensure a Vulkan driver such as lavapipe is installed): {e}"))?;
+        .map_err(|e| PhysicsError::GpuInitError(format!("No suitable wgpu adapter found (ensure a Vulkan driver such as lavapipe is installed): {e}")))?;
 
     let (device, queue) = adapter
         .request_device(
@@ -808,7 +798,7 @@ async fn init_wgpu(enable_gpu: bool) -> Result<(wgpu::Device, wgpu::Queue), Stri
             },
         )
         .await
-        .map_err(|e| format!("Failed to create wgpu device: {e}"))?;
+        .map_err(|e| PhysicsError::GpuInitError(format!("Failed to create wgpu device: {e}")))?;
 
     Ok((device, queue))
 }

@@ -48,14 +48,14 @@ describe('RenderEngine (Step 2 – headless wgpu init)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('RenderEngine (Step 3 – scene graph & transforms)', () => {
-  it('addPrimitive returns a unique string ID for each call', () => {
+  it('addPrimitive returns a unique numeric entity ID for each call', () => {
     const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
     const id1 = engine.addPrimitive('cube')
     const id2 = engine.addPrimitive('cube')
     const id3 = engine.addPrimitive('sphere')
 
-    expect(typeof id1).toBe('string')
-    expect(typeof id2).toBe('string')
+    expect(typeof id1).toBe('number')
+    expect(typeof id2).toBe('number')
     expect(id1).not.toBe(id2)
     expect(id2).not.toBe(id3)
   })
@@ -83,7 +83,7 @@ describe('RenderEngine (Step 3 – scene graph & transforms)', () => {
   it('setTransform throws for an unknown primitive ID', () => {
     const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
     expect(() => {
-      engine.setTransform('9999', [0, 0, 0], [0, 0, 0, 1])
+      engine.setTransform(9999, [0, 0, 0], [0, 0, 0, 1])
     }).toThrow()
   })
 })
@@ -386,11 +386,11 @@ describe('RenderEngine (Step 7 – GLTF/GLB loading)', () => {
     if (fs.existsSync(glbPath)) fs.unlinkSync(glbPath)
   })
 
-  it('loadModel returns a unique string ID for a valid .glb file', () => {
+  it('loadModel returns a unique numeric entity ID for a valid .glb file', () => {
     const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
     const id = engine.loadModel(glbPath)
-    expect(typeof id).toBe('string')
-    expect(id.length).toBeGreaterThan(0)
+    expect(typeof id).toBe('number')
+    expect(id).toBeGreaterThanOrEqual(0)
   })
 
   it('loadModel returns different IDs for successive calls', () => {
