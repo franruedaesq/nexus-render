@@ -270,3 +270,245 @@ describe('RenderEngine (Step 6 – coordinate system & lighting)', () => {
     expect(brightnessLit).toBeGreaterThan(brightnessNoLight + 50)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step 7 – GLTF/GLB Asset Loading
+// ─────────────────────────────────────────────────────────────────────────────
+
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+
+/**
+ * Builds a minimal valid GLB buffer in memory containing a single triangle
+ * with positions and normals.  No external file is required.
+ */
+function buildMinimalGlb(): Buffer {
+  // ── Binary chunk: 3 positions + 3 normals + 3 u16 indices (padded) ────────
+  const positions: [number, number, number][] = [
+    [0.0, 1.0, 0.0],
+    [-1.0, -1.0, 0.0],
+    [1.0, -1.0, 0.0],
+  ]
+  const normals: [number, number, number][] = [
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, 1.0],
+  ]
+  const indices = [0, 1, 2]
+
+  const posBuf = Buffer.alloc(36) // 3 * 3 * 4
+  positions.forEach(([x, y, z], i) => {
+    posBuf.writeFloatLE(x, i * 12)
+    posBuf.writeFloatLE(y, i * 12 + 4)
+    posBuf.writeFloatLE(z, i * 12 + 8)
+  })
+
+  const normalBuf = Buffer.alloc(36)
+  normals.forEach(([x, y, z], i) => {
+    normalBuf.writeFloatLE(x, i * 12)
+    normalBuf.writeFloatLE(y, i * 12 + 4)
+    normalBuf.writeFloatLE(z, i * 12 + 8)
+  })
+
+  // 3 u16 indices = 6 bytes, padded to 8 bytes for 4-byte alignment.
+  const idxBuf = Buffer.alloc(8)
+  indices.forEach((idx, i) => idxBuf.writeUInt16LE(idx, i * 2))
+
+  const binaryData = Buffer.concat([posBuf, normalBuf, idxBuf])
+  const binaryByteLength = binaryData.length // 80
+
+  // ── JSON chunk ─────────────────────────────────────────────────────────────
+  const json = JSON.stringify({
+    asset: { version: '2.0' },
+    meshes: [
+      {
+        primitives: [
+          { attributes: { POSITION: 0, NORMAL: 1 }, indices: 2 },
+        ],
+      },
+    ],
+    accessors: [
+      {
+        bufferView: 0,
+        componentType: 5126 /* FLOAT */,
+        count: 3,
+        type: 'VEC3',
+        min: [-1.0, -1.0, 0.0],
+        max: [1.0, 1.0, 0.0],
+      },
+      { bufferView: 1, componentType: 5126, count: 3, type: 'VEC3' },
+      { bufferView: 2, componentType: 5123 /* UNSIGNED_SHORT */, count: 3, type: 'SCALAR' },
+    ],
+    bufferViews: [
+      { buffer: 0, byteOffset: 0, byteLength: 36 },
+      { buffer: 0, byteOffset: 36, byteLength: 36 },
+      { buffer: 0, byteOffset: 72, byteLength: 6 },
+    ],
+    buffers: [{ byteLength: binaryByteLength }],
+  })
+
+  const jsonRaw = Buffer.from(json, 'utf8')
+  // Pad JSON to 4-byte boundary with spaces (GLB spec requires space padding).
+  const jsonPadded = Buffer.alloc(Math.ceil(jsonRaw.length / 4) * 4, 0x20)
+  jsonRaw.copy(jsonPadded)
+
+  const totalLength = 12 + 8 + jsonPadded.length + 8 + binaryData.length
+
+  // ── Header ─────────────────────────────────────────────────────────────────
+  const header = Buffer.alloc(12)
+  header.writeUInt32LE(0x46546c67, 0) // magic "glTF"
+  header.writeUInt32LE(2, 4)           // version 2
+  header.writeUInt32LE(totalLength, 8)
+
+  // ── JSON chunk header ──────────────────────────────────────────────────────
+  const jsonChunkHdr = Buffer.alloc(8)
+  jsonChunkHdr.writeUInt32LE(jsonPadded.length, 0)
+  jsonChunkHdr.writeUInt32LE(0x4e4f534a, 4) // "JSON"
+
+  // ── BIN chunk header ───────────────────────────────────────────────────────
+  const binChunkHdr = Buffer.alloc(8)
+  binChunkHdr.writeUInt32LE(binaryData.length, 0)
+  binChunkHdr.writeUInt32LE(0x004e4942, 4) // "BIN\0"
+
+  return Buffer.concat([header, jsonChunkHdr, jsonPadded, binChunkHdr, binaryData])
+}
+
+describe('RenderEngine (Step 7 – GLTF/GLB loading)', () => {
+  let glbPath: string
+
+  beforeAll(() => {
+    glbPath = path.join(os.tmpdir(), `nexus-test-${process.pid}.glb`)
+    fs.writeFileSync(glbPath, buildMinimalGlb())
+  })
+
+  afterAll(() => {
+    if (fs.existsSync(glbPath)) fs.unlinkSync(glbPath)
+  })
+
+  it('loadModel returns a unique string ID for a valid .glb file', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const id = engine.loadModel(glbPath)
+    expect(typeof id).toBe('string')
+    expect(id.length).toBeGreaterThan(0)
+  })
+
+  it('loadModel returns different IDs for successive calls', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const id1 = engine.loadModel(glbPath)
+    const id2 = engine.loadModel(glbPath)
+    expect(id1).not.toBe(id2)
+  })
+
+  it('loadModel throws for a non-existent file path', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    expect(() => engine.loadModel('/tmp/does-not-exist-nexus.glb')).toThrow()
+  })
+
+  it('setTransform works on a loaded model ID', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const id = engine.loadModel(glbPath)
+    expect(() => engine.setTransform(id, [1, 2, 3], [0, 0, 0, 1])).not.toThrow()
+  })
+
+  it('loaded model renders without throwing', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const id = engine.loadModel(glbPath)
+    engine.setTransform(id, [0, 0, 0], [0, 0, 0, 1])
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    engine.addDirectionalLight([0, 0, -1], 0.8)
+    const buf = engine.renderRaw('default')
+    expect(buf).toBeInstanceOf(Uint8Array)
+    expect(buf.length).toBe(64 * 64 * 4)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step 8 – Image Compression & Depth Output
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('RenderEngine (Step 8 – JPEG output)', () => {
+  it('renderFrameJpeg returns a Uint8Array starting with JPEG magic bytes FF D8 FF', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const cubeId = engine.addPrimitive('cube')
+    engine.setTransform(cubeId, [0, 0, 0], [0, 0, 0, 1])
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    engine.addDirectionalLight([0, 0, -1], 0.8)
+
+    const jpeg = engine.renderFrameJpeg('default', 85)
+
+    expect(jpeg).toBeInstanceOf(Uint8Array)
+    // JPEG magic bytes
+    expect(jpeg[0]).toBe(0xff)
+    expect(jpeg[1]).toBe(0xd8)
+    expect(jpeg[2]).toBe(0xff)
+  })
+
+  it('renderFrameJpeg output is non-trivially sized (larger than a bare header)', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const jpeg = engine.renderFrameJpeg('default', 80)
+    // A real JPEG for a 64×64 image is at least a few hundred bytes.
+    expect(jpeg.length).toBeGreaterThan(100)
+  })
+
+  it('renderFrameJpeg respects quality: lower quality produces smaller file', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const id = engine.addPrimitive('cube')
+    engine.setTransform(id, [0, 0, 0], [0, 0, 0, 1])
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    engine.addDirectionalLight([0, 0, -1], 0.8)
+
+    const jpegHigh = engine.renderFrameJpeg('default', 95)
+    const jpegLow = engine.renderFrameJpeg('default', 10)
+    expect(jpegLow.length).toBeLessThan(jpegHigh.length)
+  })
+})
+
+describe('RenderEngine (Step 8 – depth output)', () => {
+  it('renderDepth returns a Float32Array of length width * height', () => {
+    const width = 64
+    const height = 64
+    const engine = new RenderEngine({ width, height, enableGpu: false })
+    const depth = engine.renderDepth('default')
+    // Cross-realm instanceof fails; check BYTES_PER_ELEMENT (4 bytes per f32)
+    // and the expected element count instead.
+    expect(depth.BYTES_PER_ELEMENT).toBe(4)
+    expect(depth.length).toBe(width * height)
+  })
+
+  it('all depth values are in [0.0, 1.0]', () => {
+    const engine = new RenderEngine({ width: 32, height: 32, enableGpu: false })
+    const depth = engine.renderDepth('default')
+    for (const v of depth) {
+      expect(v).toBeGreaterThanOrEqual(0.0)
+      expect(v).toBeLessThanOrEqual(1.0)
+    }
+  })
+
+  it('background pixels have depth 1.0 (far-plane clear value)', () => {
+    // No scene objects – every pixel should be the clear depth (1.0).
+    const engine = new RenderEngine({ width: 16, height: 16, enableGpu: false })
+    const depth = engine.renderDepth('default')
+    expect(depth[0]).toBeCloseTo(1.0, 5)
+    expect(depth[depth.length - 1]).toBeCloseTo(1.0, 5)
+  })
+
+  it('foreground pixels (with a cube) have smaller depth than the background', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const id = engine.addPrimitive('cube')
+    engine.setTransform(id, [0, 0, 0], [0, 0, 0, 1])
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+
+    const depth = engine.renderDepth('default')
+
+    // Centre pixel should be on the cube face (depth < 1.0).
+    const cx = 32
+    const cy = 32
+    const centreDepth = depth[cy * 64 + cx]
+    expect(centreDepth).toBeLessThan(1.0)
+
+    // Corner pixel (top-left) should be background (depth ≈ 1.0).
+    const cornerDepth = depth[0]
+    expect(cornerDepth).toBeCloseTo(1.0, 5)
+  })
+})

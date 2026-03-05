@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use napi::bindgen_prelude::Uint8Array;
+use napi::bindgen_prelude::{Float32Array, Uint8Array};
 use napi_derive::napi;
 use wgpu::util::DeviceExt;
 
@@ -20,10 +20,28 @@ pub struct RenderEngineOptions {
     pub enable_gpu: bool,
 }
 
+/// Vertex + index data for a GLTF/GLB loaded mesh.
+struct MeshData {
+    /// Interleaved vertex bytes (position [f32;3] + normal [f32;3]) per vertex.
+    vertex_bytes: Vec<u8>,
+    /// u16 index bytes.
+    index_bytes: Vec<u8>,
+    /// Number of indices.
+    index_count: u32,
+}
+
+/// Distinguishes a built-in procedural primitive from a loaded GLTF mesh.
+enum PrimitiveKind {
+    /// Built-in primitive type, e.g. `"cube"`.
+    Builtin(String),
+    /// Mesh data loaded from a GLTF/GLB file.
+    Mesh(MeshData),
+}
+
 /// Internal representation of a scene object (not exposed via napi).
 struct SceneObject {
-    /// The primitive type (e.g. "cube", "sphere").
-    primitive_type: String,
+    /// What kind of geometry this object has.
+    kind: PrimitiveKind,
     /// The world-space transform matrix for this object.
     transform: glam::Mat4,
 }
@@ -133,7 +151,7 @@ impl RenderEngine {
         self.scene_objects.insert(
             id,
             SceneObject {
-                primitive_type,
+                kind: PrimitiveKind::Builtin(primitive_type),
                 transform: glam::Mat4::IDENTITY,
             },
         );
@@ -261,12 +279,87 @@ impl RenderEngine {
         Ok(())
     }
 
-    /// Step 4 / 5: Render the current scene and return the raw RGBA pixel data.
+    /// Step 7: Load a GLTF/GLB model from the local file system and add it to the scene.
     ///
-    /// Creates an off-screen `wgpu::Texture` (RENDER_ATTACHMENT | COPY_SRC), performs a
-    /// render pass that clears to bright red and draws any geometry in the scene using
-    /// the compiled WGSL shader pipeline, copies the texture into a CPU-visible buffer,
-    /// maps it synchronously, strips row-alignment padding, and returns the pixel bytes.
+    /// Parses the first mesh primitive in the file, extracts vertex positions, normals,
+    /// and indices, and stores the mesh data in the scene graph.
+    ///
+    /// # Arguments
+    /// * `file_path` – Absolute or relative path to a `.gltf` or `.glb` file.
+    ///
+    /// # Returns
+    /// A unique string ID (same format as `addPrimitive`) that can be passed to
+    /// `setTransform`.
+    #[napi]
+    pub fn load_model(&mut self, file_path: String) -> napi::Result<String> {
+        let (document, buffers, _images) = gltf::import(&file_path)
+            .map_err(|e| napi::Error::from_reason(format!("Failed to load GLTF file \"{file_path}\": {e}")))?;
+
+        let mesh = document
+            .meshes()
+            .next()
+            .ok_or_else(|| napi::Error::from_reason("GLTF file contains no meshes"))?;
+
+        let primitive = mesh
+            .primitives()
+            .next()
+            .ok_or_else(|| napi::Error::from_reason("GLTF mesh contains no primitives"))?;
+
+        let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
+
+        // Extract positions (required).
+        let positions: Vec<[f32; 3]> = reader
+            .read_positions()
+            .ok_or_else(|| napi::Error::from_reason("GLTF primitive has no POSITION attribute"))?
+            .collect();
+
+        // Extract normals; if absent, default to +Y (flat normal).
+        let normals: Vec<[f32; 3]> = reader
+            .read_normals()
+            .map(|it| it.collect())
+            .unwrap_or_else(|| vec![[0.0, 1.0, 0.0]; positions.len()]);
+
+        // Extract indices; if absent, treat vertices as a flat list.
+        let indices: Vec<u16> = reader
+            .read_indices()
+            .map(|ri| ri.into_u32().map(|i| i as u16).collect())
+            .unwrap_or_else(|| (0..positions.len() as u16).collect());
+
+        // Interleave position + normal – same layout as `cube_geometry()`.
+        let vertex_bytes: Vec<u8> = positions
+            .iter()
+            .zip(normals.iter())
+            .flat_map(|(p, n)| {
+                p.iter()
+                    .chain(n.iter())
+                    .flat_map(|f| f.to_le_bytes())
+            })
+            .collect();
+
+        let index_bytes: Vec<u8> = indices
+            .iter()
+            .flat_map(|i| i.to_le_bytes())
+            .collect();
+
+        let index_count = indices.len() as u32;
+
+        let id = self.next_id;
+        self.next_id += 1;
+        self.scene_objects.insert(
+            id,
+            SceneObject {
+                kind: PrimitiveKind::Mesh(MeshData {
+                    vertex_bytes,
+                    index_bytes,
+                    index_count,
+                }),
+                transform: glam::Mat4::IDENTITY,
+            },
+        );
+        Ok(id.to_string())
+    }
+
+    /// Step 4 / 5: Render the current scene and return the raw RGBA pixel data.
     ///
     /// # Arguments
     /// * `camera_id` – Reserved for future use; pass any string (e.g. `"default"`).
@@ -275,6 +368,62 @@ impl RenderEngine {
     /// A `Uint8Array` of length `width * height * 4` in RGBA byte order.
     #[napi]
     pub fn render_raw(&self, _camera_id: String) -> napi::Result<Uint8Array> {
+        let (rgba, _depth) = self.render_internal()?;
+        Ok(Uint8Array::new(rgba))
+    }
+
+    /// Step 8: Render the current scene and return the frame encoded as JPEG.
+    ///
+    /// # Arguments
+    /// * `camera_id` – Reserved for future use; pass any string (e.g. `"default"`).
+    /// * `quality`   – JPEG quality in the range 1–100.
+    ///
+    /// # Returns
+    /// A `Uint8Array` containing the JPEG byte stream (starts with `FF D8 FF`).
+    #[napi]
+    pub fn render_frame_jpeg(&self, _camera_id: String, quality: u32) -> napi::Result<Uint8Array> {
+        let (rgba, _depth) = self.render_internal()?;
+
+        let img = image::RgbaImage::from_raw(self.width, self.height, rgba)
+            .ok_or_else(|| napi::Error::from_reason("Failed to build RgbaImage from pixel buffer"))?;
+
+        let mut jpeg_bytes: Vec<u8> = Vec::new();
+        let q = quality.clamp(1, 100) as u8;
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg_bytes, q);
+        encoder
+            .encode_image(&img)
+            .map_err(|e| napi::Error::from_reason(format!("JPEG encoding failed: {e}")))?;
+
+        Ok(Uint8Array::new(jpeg_bytes))
+    }
+
+    /// Step 8: Render the current scene and return the raw depth buffer.
+    ///
+    /// The depth values are in the range `[0.0, 1.0]` where `1.0` is the far
+    /// plane (background) and smaller values indicate geometry closer to the
+    /// camera.
+    ///
+    /// # Arguments
+    /// * `camera_id` – Reserved for future use; pass any string (e.g. `"default"`).
+    ///
+    /// # Returns
+    /// A `Float32Array` of length `width * height` (one `f32` per pixel,
+    /// single-channel).
+    #[napi]
+    pub fn render_depth(&self, _camera_id: String) -> napi::Result<Float32Array> {
+        let (_rgba, depth) = self.render_internal()?;
+        Ok(Float32Array::new(depth))
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    /// Internal render pass shared by `render_raw`, `render_frame_jpeg`, and
+    /// `render_depth`.
+    ///
+    /// Returns `(rgba_pixels, depth_pixels)` where:
+    /// * `rgba_pixels` – `Vec<u8>` of length `width × height × 4` (RGBA8).
+    /// * `depth_pixels` – `Vec<f32>` of length `width × height` (Depth32Float).
+    fn render_internal(&self) -> napi::Result<(Vec<u8>, Vec<f32>)> {
         // ── 1. Create the colour render target texture ───────────────────────────
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("render_target"),
@@ -291,7 +440,7 @@ impl RenderEngine {
             view_formats: &[],
         });
 
-        // ── 2. Create the depth texture ──────────────────────────────────────────
+        // ── 2. Create the depth texture (COPY_SRC so we can read it back) ───────
         let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("depth_target"),
             size: wgpu::Extent3d {
@@ -303,12 +452,12 @@ impl RenderEngine {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // ── 3. Create the CPU-readable output buffer ─────────────────────────────
+        // ── 3. Create the CPU-readable colour output buffer ──────────────────────
         // wgpu requires each row of texels to be padded to COPY_BYTES_PER_ROW_ALIGNMENT.
         let bytes_per_pixel = 4u32; // RGBA8
         let unpadded_bytes_per_row = self.width * bytes_per_pixel;
@@ -319,6 +468,19 @@ impl RenderEngine {
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("output_buffer"),
             size: buffer_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // ── 3b. Create the CPU-readable depth output buffer ──────────────────────
+        let depth_bytes_per_pixel = 4u32; // Depth32Float = f32
+        let unpadded_depth_row = self.width * depth_bytes_per_pixel;
+        let padded_depth_row = (unpadded_depth_row + align - 1) / align * align;
+        let depth_buffer_size = (padded_depth_row * self.height) as u64;
+
+        let depth_output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("depth_output_buffer"),
+            size: depth_buffer_size,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -345,23 +507,23 @@ impl RenderEngine {
             .unwrap_or((glam::Vec3::new(0.0, -1.0, 0.0), 0.0));
         let light_uniform_bytes = light_to_bytes(light_dir, light_intensity);
 
-        // ── 5. Build cube geometry buffers (shared by all cube objects) ───────────
+        // ── 5. Build cube geometry buffers (shared by all built-in cube objects) ──
         let (cube_vertex_data, cube_index_data) = cube_geometry();
-        let vertex_buffer = self
+        let cube_vertex_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("cube_vertices"),
                 contents: &cube_vertex_data,
                 usage: wgpu::BufferUsages::VERTEX,
             });
-        let index_buffer = self
+        let cube_index_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("cube_indices"),
                 contents: &cube_index_data,
                 usage: wgpu::BufferUsages::INDEX,
             });
-        let index_count = (cube_index_data.len() / 2) as u32; // u16 indices
+        let cube_index_count = (cube_index_data.len() / 2) as u32; // u16 indices
 
         // ── 6. Camera uniform buffer (shared across all draw calls) ───────────────
         let camera_buffer = self
@@ -410,7 +572,7 @@ impl RenderEngine {
                     view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Discard,
+                        store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
@@ -422,20 +584,71 @@ impl RenderEngine {
             // Draw each scene object using the compiled shader pipeline.
             if !self.scene_objects.is_empty() {
                 render_pass.set_pipeline(&self.render_pipeline);
-                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                render_pass.set_index_buffer(
-                    index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint16,
-                );
 
                 for obj in self.scene_objects.values() {
-                    // Only cube geometry is supported in this step; skip unknown types.
-                    if obj.primitive_type != "cube" {
-                        continue;
-                    }
+                    let (vbuf, ibuf, icount) = match &obj.kind {
+                        PrimitiveKind::Builtin(ptype) if ptype == "cube" => {
+                            (&cube_vertex_buffer, &cube_index_buffer, cube_index_count)
+                        }
+                        PrimitiveKind::Mesh(mesh) => {
+                            // Upload mesh buffers per-draw (allocated once per object).
+                            let vb = self.device.create_buffer_init(
+                                &wgpu::util::BufferInitDescriptor {
+                                    label: Some("mesh_vertices"),
+                                    contents: &mesh.vertex_bytes,
+                                    usage: wgpu::BufferUsages::VERTEX,
+                                },
+                            );
+                            let ib = self.device.create_buffer_init(
+                                &wgpu::util::BufferInitDescriptor {
+                                    label: Some("mesh_indices"),
+                                    contents: &mesh.index_bytes,
+                                    usage: wgpu::BufferUsages::INDEX,
+                                },
+                            );
+                            // Cannot return local references; fall through to draw below.
+                            let normal_mat = obj.transform.inverse().transpose();
+                            let model_bytes = model_to_bytes(&obj.transform, &normal_mat);
+                            let model_buffer = self.device.create_buffer_init(
+                                &wgpu::util::BufferInitDescriptor {
+                                    label: Some("model_uniform"),
+                                    contents: &model_bytes,
+                                    usage: wgpu::BufferUsages::UNIFORM,
+                                },
+                            );
+                            let bind_group =
+                                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                    label: Some("main_bind_group"),
+                                    layout: &self.bind_group_layout,
+                                    entries: &[
+                                        wgpu::BindGroupEntry {
+                                            binding: 0,
+                                            resource: camera_buffer.as_entire_binding(),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 1,
+                                            resource: model_buffer.as_entire_binding(),
+                                        },
+                                        wgpu::BindGroupEntry {
+                                            binding: 2,
+                                            resource: light_buffer.as_entire_binding(),
+                                        },
+                                    ],
+                                });
+                            render_pass.set_vertex_buffer(0, vb.slice(..));
+                            render_pass.set_index_buffer(
+                                ib.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            render_pass.set_bind_group(0, &bind_group, &[]);
+                            render_pass.draw_indexed(0..mesh.index_count, 0, 0..1);
+                            continue;
+                        }
+                        // Skip unknown builtin types.
+                        _ => continue,
+                    };
 
                     // Compute the normal matrix: transpose(inverse(model)).
-                    // For uniform-scale transforms this equals the model matrix.
                     let normal_mat = obj.transform.inverse().transpose();
                     let model_uniform_bytes = model_to_bytes(&obj.transform, &normal_mat);
 
@@ -467,12 +680,20 @@ impl RenderEngine {
                             ],
                         });
 
+                    render_pass.set_vertex_buffer(0, vbuf.slice(..));
+                    render_pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint16);
                     render_pass.set_bind_group(0, &bind_group, &[]);
-                    render_pass.draw_indexed(0..index_count, 0, 0..1);
+                    render_pass.draw_indexed(0..icount, 0, 0..1);
                 }
             }
         }
 
+        // ── 8. Copy colour texture to CPU buffer ─────────────────────────────────
+        let extent = wgpu::Extent3d {
+            width: self.width,
+            height: self.height,
+            depth_or_array_layers: 1,
+        };
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -488,20 +709,43 @@ impl RenderEngine {
                     rows_per_image: Some(self.height),
                 },
             },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
+            extent,
         );
 
-        // ── 8. Submit and wait for completion ────────────────────────────────────
+        // ── 8b. Copy depth texture to CPU buffer ─────────────────────────────────
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &depth_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::DepthOnly,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &depth_output_buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_depth_row),
+                    rows_per_image: Some(self.height),
+                },
+            },
+            extent,
+        );
+
+        // ── 9. Submit and wait for completion ────────────────────────────────────
         let submission = self.queue.submit(std::iter::once(encoder.finish()));
 
-        let buffer_slice = output_buffer.slice(..);
-        let (sender, receiver) = std::sync::mpsc::channel();
-        buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
-            sender.send(result).ok();
+        // Map colour buffer.
+        let color_slice = output_buffer.slice(..);
+        let (color_tx, color_rx) = std::sync::mpsc::channel();
+        color_slice.map_async(wgpu::MapMode::Read, move |r| {
+            color_tx.send(r).ok();
+        });
+
+        // Map depth buffer.
+        let depth_slice = depth_output_buffer.slice(..);
+        let (depth_tx, depth_rx) = std::sync::mpsc::channel();
+        depth_slice.map_async(wgpu::MapMode::Read, move |r| {
+            depth_tx.send(r).ok();
         });
 
         self.device
@@ -511,25 +755,43 @@ impl RenderEngine {
             })
             .map_err(|e| napi::Error::from_reason(format!("Device poll failed: {e:?}")))?;
 
-        receiver
+        color_rx
             .recv()
-            .map_err(|_| napi::Error::from_reason("Buffer map channel closed unexpectedly"))?
-            .map_err(|e| napi::Error::from_reason(format!("Buffer map failed: {e}")))?;
+            .map_err(|_| napi::Error::from_reason("Color buffer map channel closed unexpectedly"))?
+            .map_err(|e| napi::Error::from_reason(format!("Color buffer map failed: {e}")))?;
 
-        // ── 9. Read back, strip row padding, and return ──────────────────────────
-        let padded_data = buffer_slice.get_mapped_range();
-        let result: Vec<u8> = if padded_bytes_per_row == unpadded_bytes_per_row {
-            padded_data.to_vec()
+        depth_rx
+            .recv()
+            .map_err(|_| napi::Error::from_reason("Depth buffer map channel closed unexpectedly"))?
+            .map_err(|e| napi::Error::from_reason(format!("Depth buffer map failed: {e}")))?;
+
+        // ── 10. Read back colour, strip row padding ───────────────────────────────
+        let padded_color = color_slice.get_mapped_range();
+        let rgba: Vec<u8> = if padded_bytes_per_row == unpadded_bytes_per_row {
+            padded_color.to_vec()
         } else {
-            padded_data
+            padded_color
                 .chunks(padded_bytes_per_row as usize)
                 .flat_map(|row| row[..unpadded_bytes_per_row as usize].iter().copied())
                 .collect()
         };
-        drop(padded_data);
+        drop(padded_color);
         output_buffer.unmap();
 
-        Ok(Uint8Array::new(result))
+        // ── 11. Read back depth, strip row padding, convert to f32 ───────────────
+        let padded_depth_data = depth_slice.get_mapped_range();
+        let depth: Vec<f32> = padded_depth_data
+            .chunks(padded_depth_row as usize)
+            .flat_map(|row| {
+                row[..unpadded_depth_row as usize]
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            })
+            .collect();
+        drop(padded_depth_data);
+        depth_output_buffer.unmap();
+
+        Ok((rgba, depth))
     }
 }
 
