@@ -119,14 +119,14 @@ impl RenderEngine {
             .parse()
             .map_err(|_| napi::Error::from_reason(format!("Invalid primitive ID: \"{id}\"")))?;
 
-        if position.len() < 3 {
+        if position.len() != 3 {
             return Err(napi::Error::from_reason(
-                "position must have at least 3 components [x, y, z]",
+                "position must have exactly 3 components [x, y, z]",
             ));
         }
-        if rotation.len() < 4 {
+        if rotation.len() != 4 {
             return Err(napi::Error::from_reason(
-                "rotation must have at least 4 components [x, y, z, w]",
+                "rotation must have exactly 4 components [x, y, z, w]",
             ));
         }
 
@@ -135,12 +135,14 @@ impl RenderEngine {
         })?;
 
         let pos = glam::Vec3::new(position[0] as f32, position[1] as f32, position[2] as f32);
+        // Normalize the quaternion to ensure a pure rotation with no scaling artefacts.
         let quat = glam::Quat::from_xyzw(
             rotation[0] as f32,
             rotation[1] as f32,
             rotation[2] as f32,
             rotation[3] as f32,
-        );
+        )
+        .normalize();
         obj.transform = glam::Mat4::from_rotation_translation(quat, pos);
 
         Ok(())
