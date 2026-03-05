@@ -110,7 +110,7 @@ impl RenderEngine {
     #[napi(constructor)]
     pub fn new(options: RenderEngineOptions) -> napi::Result<Self> {
         let (device, queue) = pollster::block_on(init_wgpu(options.enable_gpu))
-            .map_err(|e: PhysicsError| napi::Error::from_reason(format!("wgpu init failed: {e}")))?;
+            .map_err(|e| napi::Error::from_reason(format!("wgpu init failed: {e}")))?;
 
         let (render_pipeline, bind_group_layout) = build_render_pipeline(&device);
 
@@ -175,7 +175,7 @@ impl RenderEngine {
         rotation: Vec<f64>,
     ) -> napi::Result<()> {
         if position.len() != 3 {
-            return Err(PhysicsError::InvalidPosition.into());
+            return Err(PhysicsError::InvalidVec3.into());
         }
         if rotation.len() != 4 {
             return Err(PhysicsError::InvalidRotation.into());
@@ -219,10 +219,10 @@ impl RenderEngine {
         fov_degrees: f64,
     ) -> napi::Result<()> {
         if position.len() != 3 {
-            return Err(PhysicsError::InvalidPosition.into());
+            return Err(PhysicsError::InvalidVec3.into());
         }
         if target.len() != 3 {
-            return Err(PhysicsError::InvalidPosition.into());
+            return Err(PhysicsError::InvalidVec3.into());
         }
         self.camera = CameraState {
             position: glam::Vec3::new(
@@ -756,7 +756,7 @@ impl RenderEngine {
 }
 
 /// Initialize a headless wgpu device.
-async fn init_wgpu(enable_gpu: bool) -> Result<(wgpu::Device, wgpu::Queue), PhysicsError> {
+async fn init_wgpu(enable_gpu: bool) -> Result<(wgpu::Device, wgpu::Queue), String> {
     // On Linux without a display server we need the Vulkan backend.
     // `WGPU_BACKEND` env-var can override this at runtime.
     let backends = std::env::var("WGPU_BACKEND")
@@ -784,7 +784,7 @@ async fn init_wgpu(enable_gpu: bool) -> Result<(wgpu::Device, wgpu::Queue), Phys
             compatible_surface: None, // headless – no window surface
         })
         .await
-        .map_err(|e| PhysicsError::GpuInitError(format!("No suitable wgpu adapter found (ensure a Vulkan driver such as lavapipe is installed): {e}")))?;
+        .map_err(|e| format!("No suitable wgpu adapter found (ensure a Vulkan driver such as lavapipe is installed): {e}"))?;
 
     let (device, queue) = adapter
         .request_device(
@@ -798,7 +798,7 @@ async fn init_wgpu(enable_gpu: bool) -> Result<(wgpu::Device, wgpu::Queue), Phys
             },
         )
         .await
-        .map_err(|e| PhysicsError::GpuInitError(format!("Failed to create wgpu device: {e}")))?;
+        .map_err(|e| format!("Failed to create wgpu device: {e}"))?;
 
     Ok((device, queue))
 }

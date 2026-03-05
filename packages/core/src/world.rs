@@ -1,4 +1,4 @@
-/// Errors that can occur in the scene-world operations.
+/// Errors that can occur in scene-world operations.
 ///
 /// Using a typed enum (rather than `String`) makes this crate usable as a
 /// pure Rust library without depending on `napi`. Call sites in `lib.rs`
@@ -7,16 +7,14 @@
 pub enum PhysicsError {
     /// No scene object exists for the given numeric entity ID.
     EntityNotFound(u32),
-    /// A `position` vector did not have exactly 3 components.
-    InvalidPosition,
+    /// A `position` or `target` vector did not have exactly 3 components.
+    InvalidVec3,
     /// A `rotation` quaternion did not have exactly 4 components.
     InvalidRotation,
     /// A `direction` vector did not have exactly 3 components.
     InvalidDirection,
     /// An asset (GLTF/GLB) could not be loaded.
     AssetLoadError(String),
-    /// The wgpu device or adapter could not be initialised.
-    GpuInitError(String),
 }
 
 impl std::fmt::Display for PhysicsError {
@@ -25,8 +23,8 @@ impl std::fmt::Display for PhysicsError {
             PhysicsError::EntityNotFound(id) => {
                 write!(f, "Scene object not found for entity ID: {id}")
             }
-            PhysicsError::InvalidPosition => {
-                write!(f, "position must have exactly 3 components [x, y, z]")
+            PhysicsError::InvalidVec3 => {
+                write!(f, "vector must have exactly 3 components [x, y, z]")
             }
             PhysicsError::InvalidRotation => {
                 write!(f, "rotation must have exactly 4 components [x, y, z, w]")
@@ -35,7 +33,6 @@ impl std::fmt::Display for PhysicsError {
                 write!(f, "direction must have exactly 3 components [x, y, z]")
             }
             PhysicsError::AssetLoadError(msg) => write!(f, "Asset load error: {msg}"),
-            PhysicsError::GpuInitError(msg) => write!(f, "GPU init error: {msg}"),
         }
     }
 }
