@@ -1,6 +1,6 @@
 {
   "name": "@nexus-render/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "High-performance headless 3D rendering library for Node.js (Rust/wgpu via napi-rs)",
   "main": "index.js",
   "types": "index.d.ts",
@@ -40,7 +40,10 @@
     "build:debug": "napi build --platform --dts _generated.d.ts",
     "create-npm-dirs": "napi create-npm-dirs",
     "test": "jest",
-    "prepublishOnly": "napi prepublish -t npm"
+    "prepublishOnly": "napi prepublish -t npm",
+    "publish:dry": "npm publish --dry-run --access public",
+    "publish:npm": "npm publish --access public",
+    "release": "npm run build && npm run test && npm run publish:npm"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.5.1",
@@ -60,6 +63,6 @@
     "node": ">= 18"
   },
   "optionalDependencies": {
-    "@nexus-render/core-linux-x64-gnu": "0.1.0"
+    "@nexus-render/core-linux-x64-gnu": "0.1.1"
   }
 }

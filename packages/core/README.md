@@ -1,21 +1,22 @@
 # `@nexus-render/core`
 
-High-performance **headless 3D rendering** library for Node.js, written in Rust using [`wgpu`](https://wgpu.rs/) and exposed to TypeScript via [`napi-rs`](https://napi.rs/).
+High-performance **headless 3D rendering** for Node.js — written in Rust with [`wgpu`](https://wgpu.rs/), exposed to TypeScript via [`napi-rs`](https://napi.rs/).
+
+Render 3D scenes entirely on the server: no browser, no display, no DOM.
 
 ## Features
 
-- **100% headless** – runs in pure Node.js, Docker, or cloud servers with no display required
-- **GPU accelerated** – leverages native GPU via `wgpu` (Vulkan/Metal/DX12) with software fallback
-- **GLTF/GLB loading** – load 3D assets from the file system
-- **Built-in primitives** – cube, sphere, cylinder
-- **Scene graph** – ID-based entity management with transform updates at 60 Hz+
-- **Multiple output formats** – raw RGBA `Uint8Array`, JPEG buffer, and depth map (`Float32Array`)
-- **Three.js compatible** – right-handed Y-up coordinate system, `(x, y, z, w)` quaternions
+- **100% headless** — runs in Node.js, Docker, or cloud servers with no display required
+- **GPU accelerated** — uses native GPU via wgpu (Vulkan / Metal / DX12) with automatic software fallback
+- **GLTF/GLB loading** — load real 3D assets from disk
+- **Built-in primitives** — cube and sphere out of the box
+- **Multiple output formats** — raw RGBA `Uint8Array`, JPEG buffer, depth map `Float32Array`
+- **Three.js compatible** — right-handed Y-up coordinate system, `[x, y, z, w]` quaternions
 
 ## Requirements
 
 - Node.js >= 18
-- Linux x86_64 (glibc) – additional platforms planned
+- Linux x86_64 (glibc) — additional platforms planned
 
 ## Installation
 
@@ -28,29 +29,29 @@ npm install @nexus-render/core
 ```ts
 import { RenderEngine } from '@nexus-render/core'
 
-// Create a headless render engine (software fallback when no GPU is available)
 const engine = new RenderEngine({ width: 1280, height: 720, enableGpu: false })
 
-// Add a cube to the scene and place it above the origin
+// Build a scene
 const cubeId = engine.addPrimitive('cube')
-engine.setTransform(cubeId, [0, 1, 0], [0, 0, 0, 1])
-
-// Add a directional light
+engine.setTransform(cubeId, [0, 0, 0], [0, 0, 0, 1])
 engine.addDirectionalLight([0, -1, -0.5], 0.8)
-
-// Point the camera at the cube
 engine.setCamera([0, 2, 5], [0, 0, 0], 60)
 
-// Render to a raw RGBA buffer
+// Render to raw RGBA
 const pixels = engine.renderRaw('default')
-// pixels is a Uint8Array of length width * height * 4
+// → Uint8Array of length width * height * 4
 
-// Or render to JPEG
+// Render to JPEG
 const jpeg = engine.renderFrameJpeg('default', 90)
-// jpeg starts with the JPEG magic bytes FF D8 FF
+// → Uint8Array starting with JPEG magic bytes FF D8 FF
 
-// Or load a GLTF/GLB model
+// Render depth map
+const depth = engine.renderDepth('default')
+// → Float32Array of length width * height, values in [0.0, 1.0]
+
+// Load a GLTF/GLB model
 const modelId = engine.loadModel('/path/to/model.glb')
+engine.setTransform(modelId, [1, 0, 0], [0, 0, 0, 1])
 ```
 
 ## API
@@ -58,7 +59,7 @@ const modelId = engine.loadModel('/path/to/model.glb')
 ### `new RenderEngine(options)`
 
 | Option | Type | Description |
-|--------|------|-------------|
+|---|---|---|
 | `width` | `number` | Render target width in pixels |
 | `height` | `number` | Render target height in pixels |
 | `enableGpu` | `boolean` | Request a physical GPU; falls back to software if unavailable |
@@ -66,19 +67,22 @@ const modelId = engine.loadModel('/path/to/model.glb')
 ### Methods
 
 | Method | Returns | Description |
-|--------|---------|-------------|
-| `addPrimitive(type)` | `string` | Add a built-in primitive (`"cube"` or `"sphere"`) and return its ID |
-| `setTransform(id, position, rotation)` | `void` | Set world-space position `[x,y,z]` and quaternion rotation `[x,y,z,w]` |
+|---|---|---|
+| `addPrimitive(type)` | `number` | Add a built-in primitive (`"cube"` or `"sphere"`), returns a unique entity ID |
+| `setTransform(id, position, rotation)` | `void` | Set world-space position `[x,y,z]` and quaternion `[x,y,z,w]` |
 | `setCamera(position, target, fovDegrees)` | `void` | Configure the virtual camera |
 | `addDirectionalLight(direction, intensity)` | `void` | Add a directional light |
-| `loadModel(filePath)` | `string` | Load a GLTF/GLB file and return its scene ID |
-| `renderRaw(cameraId)` | `Uint8Array` | Render to raw RGBA pixel buffer (`width × height × 4` bytes) |
-| `renderFrameJpeg(cameraId, quality)` | `Uint8Array` | Render and compress to JPEG (quality 1–100) |
-| `renderDepth(cameraId)` | `Float32Array` | Render depth map (`width × height` values in [0, 1]) |
+| `loadModel(filePath)` | `number` | Load a GLTF/GLB file, returns a unique entity ID |
+| `renderRaw(cameraId)` | `Uint8Array` | Raw RGBA pixel buffer — `width × height × 4` bytes |
+| `renderFrameJpeg(cameraId, quality)` | `Uint8Array` | JPEG-encoded frame — quality range 1–100 |
+| `renderDepth(cameraId)` | `Float32Array` | Depth map — `width × height` values in `[0.0, 1.0]` |
 
-### `sum(a, b)`
+### Coordinate system
 
-Utility function exported for build-pipeline verification.
+Matches Three.js conventions:
+- Right-handed, Y-up
+- `+X` = right, `+Y` = up, `+Z` = toward the viewer
+- Quaternions in `[x, y, z, w]` order
 
 ## License
 

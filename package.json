@@ -1,0 +1,14 @@
+{
+  "name": "nexus-render",
+  "private": true,
+  "workspaces": [
+    "packages/core"
+  ],
+  "scripts": {
+    "build": "npm run build -w packages/core",
+    "test": "npm run test -w packages/core",
+    "publish:dry": "npm run publish:dry -w packages/core",
+    "publish:npm": "npm run publish:npm -w packages/core",
+    "release": "npm run build && npm run test && npm run publish:npm"
+  }
+}
