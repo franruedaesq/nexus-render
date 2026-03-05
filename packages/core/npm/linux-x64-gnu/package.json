@@ -1,0 +1,22 @@
+{
+  "name": "@nexus-render/core-linux-x64-gnu",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "nexus-render-core.linux-x64-gnu.node",
+  "files": [
+    "nexus-render-core.linux-x64-gnu.node"
+  ],
+  "description": "High-performance headless 3D rendering library for Node.js (Rust/wgpu via napi-rs)",
+  "license": "MIT",
+  "engines": {
+    "node": ">= 18"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ]
+}
