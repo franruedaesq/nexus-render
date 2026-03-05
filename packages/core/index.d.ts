@@ -7,7 +7,7 @@ export interface RenderEngineOptions {
   enableGpu: boolean
 }
 
-/** Step 2: Headless wgpu RenderEngine. */
+/** Step 2 / 3 / 4: Headless wgpu RenderEngine. */
 export declare class RenderEngine {
   /** Create a new headless RenderEngine. */
   constructor(options: RenderEngineOptions)
@@ -15,6 +15,25 @@ export declare class RenderEngine {
   get width(): number
   /** Returns the render target height. */
   get height(): number
+  /**
+   * Step 3: Add a primitive to the scene and return its unique string ID.
+   * @param primitiveType - e.g. `"cube"`, `"sphere"`
+   * @returns A unique string ID to pass to `setTransform`.
+   */
+  addPrimitive(primitiveType: string): string
+  /**
+   * Step 3: Update the world-space transform of an existing scene object.
+   * @param id       - The string ID returned by `addPrimitive`.
+   * @param position - `[x, y, z]` translation.
+   * @param rotation - `[x, y, z, w]` unit quaternion (Three.js Quaternion order).
+   */
+  setTransform(id: string, position: Array<number>, rotation: Array<number>): void
+  /**
+   * Step 4: Render the current scene and return raw RGBA pixel data.
+   * @param cameraId - Reserved for future use; pass any string (e.g. `"default"`).
+   * @returns A `Uint8Array` of length `width * height * 4` in RGBA byte order.
+   */
+  renderRaw(cameraId: string): Uint8Array
 }
 
 /**

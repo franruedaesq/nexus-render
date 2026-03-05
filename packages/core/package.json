@@ -6,8 +6,8 @@
   "types": "index.d.ts",
   "license": "MIT",
   "scripts": {
-    "build": "napi build --platform --release",
-    "build:debug": "napi build --platform",
+    "build": "napi build --platform --release --dts _generated.d.ts",
+    "build:debug": "napi build --platform --dts _generated.d.ts",
     "test": "jest",
     "prepublishOnly": "napi prepublish -t npm"
   },
