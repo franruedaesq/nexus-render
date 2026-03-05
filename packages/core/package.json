@@ -4,10 +4,41 @@
   "description": "High-performance headless 3D rendering library for Node.js (Rust/wgpu via napi-rs)",
   "main": "index.js",
   "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.js",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
   "license": "MIT",
+  "author": "Nexus Render Contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/franruedaesq/nexus-render.git",
+    "directory": "packages/core"
+  },
+  "keywords": [
+    "3d",
+    "rendering",
+    "headless",
+    "wgpu",
+    "napi",
+    "gltf",
+    "glb",
+    "rust",
+    "node",
+    "offscreen"
+  ],
   "scripts": {
     "build": "napi build --platform --release --dts _generated.d.ts",
     "build:debug": "napi build --platform --dts _generated.d.ts",
+    "create-npm-dirs": "napi create-npm-dirs",
     "test": "jest",
     "prepublishOnly": "napi prepublish -t npm"
   },
