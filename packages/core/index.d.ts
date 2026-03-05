@@ -16,18 +16,18 @@ export declare class RenderEngine {
   /** Returns the render target height. */
   get height(): number
   /**
-   * Step 3: Add a primitive to the scene and return its unique string ID.
+   * Step 3: Add a primitive to the scene and return its unique numeric entity ID.
    * @param primitiveType - e.g. `"cube"`, `"sphere"`
-   * @returns A unique string ID to pass to `setTransform`.
+   * @returns A unique `number` (u32) entity ID to pass to `setTransform`.
    */
-  addPrimitive(primitiveType: string): string
+  addPrimitive(primitiveType: string): number
   /**
    * Step 3: Update the world-space transform of an existing scene object.
-   * @param id       - The string ID returned by `addPrimitive`.
+   * @param id       - The numeric entity ID returned by `addPrimitive` or `loadModel`.
    * @param position - `[x, y, z]` translation.
    * @param rotation - `[x, y, z, w]` unit quaternion (Three.js Quaternion order).
    */
-  setTransform(id: string, position: Array<number>, rotation: Array<number>): void
+  setTransform(id: number, position: Array<number>, rotation: Array<number>): void
   /**
    * Step 5 / 6: Set the camera for the next `renderRaw` call.
    *
@@ -56,9 +56,9 @@ export declare class RenderEngine {
   /**
    * Step 7: Load a GLTF/GLB model from the local file system and add it to the scene.
    * @param filePath - Absolute or relative path to a `.gltf` or `.glb` file.
-   * @returns A unique string ID (same format as `addPrimitive`) usable with `setTransform`.
+   * @returns A unique `number` (u32) entity ID usable with `setTransform`.
    */
-  loadModel(filePath: string): string
+  loadModel(filePath: string): number
   /**
    * Step 8: Render the current scene and return the frame encoded as JPEG.
    * @param cameraId - Reserved for future use; pass any string (e.g. `"default"`).
