@@ -53,6 +53,32 @@ export declare class RenderEngine {
    * @returns A `Uint8Array` of length `width * height * 4` in RGBA byte order.
    */
   renderRaw(cameraId: string): Uint8Array
+  /**
+   * Step 7: Load a GLTF/GLB model from disk and add its mesh primitives to the
+   * scene graph. Returns the string ID of the first primitive inserted.
+   *
+   * @param filePath - Absolute or CWD-relative path to a `.gltf` or `.glb` file.
+   * @returns The string ID of the first scene object created from the model.
+   */
+  loadModel(filePath: string): string
+  /**
+   * Step 8: Render the current scene and return a JPEG-compressed image.
+   *
+   * @param cameraId - Reserved for future use; pass any string (e.g. `"default"`).
+   * @param quality  - JPEG quality 1–100 (higher = better quality, larger file).
+   * @returns A `Uint8Array` containing a valid JPEG byte stream (starts with `FF D8 FF`).
+   */
+  renderFrameJpeg(cameraId: string, quality: number): Uint8Array
+  /**
+   * Step 8: Render the current scene and return the raw depth buffer.
+   *
+   * Each pixel is a 32-bit little-endian float in `[0.0, 1.0]`
+   * (0 = near plane, 1 = far / clear value).
+   *
+   * @param cameraId - Reserved for future use; pass any string (e.g. `"default"`).
+   * @returns A `Uint8Array` of length `width * height * 4` (one `f32` per pixel).
+   */
+  renderDepth(cameraId: string): Uint8Array
 }
 
 /**

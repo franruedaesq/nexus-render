@@ -13,6 +13,8 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 wgpu = { version = "28", default-features = false, features = ["vulkan", "wgsl"] }
 pollster = "0.4"
 glam = "0.32"
+gltf = { version = "1", features = ["import"] }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [build-dependencies]
 napi-build = "2"

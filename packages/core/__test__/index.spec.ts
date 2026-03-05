@@ -1,3 +1,4 @@
+import * as path from 'path'
 import { sum, RenderEngine } from '../index'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -268,5 +269,153 @@ describe('RenderEngine (Step 6 – coordinate system & lighting)', () => {
 
     // The lit render must be noticeably brighter than the ambient-only render.
     expect(brightnessLit).toBeGreaterThan(brightnessNoLight + 50)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step 7 – GLTF/GLB Asset Loading
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('RenderEngine (Step 7 – GLTF/GLB asset loading)', () => {
+  const GLB_PATH = path.join(__dirname, 'fixtures', 'triangle.glb')
+
+  it('loadModel returns a non-empty string ID for a valid .glb file', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const id = engine.loadModel(GLB_PATH)
+    expect(typeof id).toBe('string')
+    expect(id.length).toBeGreaterThan(0)
+  })
+
+  it('loadModel throws for a non-existent file path', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    expect(() => engine.loadModel('/tmp/does_not_exist_xyz.glb')).toThrow()
+  })
+
+  it('loadModel returns a different ID from a previously added primitive', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const cubeId = engine.addPrimitive('cube')
+    const meshId = engine.loadModel(GLB_PATH)
+    expect(meshId).not.toBe(cubeId)
+  })
+
+  it('setTransform works on an ID returned by loadModel', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const id = engine.loadModel(GLB_PATH)
+    expect(() => {
+      engine.setTransform(id, [0, 0, 0], [0, 0, 0, 1])
+    }).not.toThrow()
+  })
+
+  it('renderRaw succeeds after loading a .glb model', () => {
+    const width = 64
+    const height = 64
+    const engine = new RenderEngine({ width, height, enableGpu: false })
+    engine.loadModel(GLB_PATH)
+    engine.setCamera([0.5, 0.5, 3], [0.5, 0.5, 0], 60)
+    engine.addDirectionalLight([0, 0, -1], 0.8)
+    const buf = engine.renderRaw('default')
+    expect(buf).toBeInstanceOf(Uint8Array)
+    expect(buf.length).toBe(width * height * 4)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step 8 – Image Compression & Depth Output
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('RenderEngine (Step 8 – JPEG compression & depth output)', () => {
+  // ── renderFrameJpeg ───────────────────────────────────────────────────────
+
+  it('renderFrameJpeg returns a non-empty Uint8Array', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    const jpeg = engine.renderFrameJpeg('default', 85)
+    expect(jpeg).toBeInstanceOf(Uint8Array)
+    expect(jpeg.length).toBeGreaterThan(0)
+  })
+
+  it('renderFrameJpeg output starts with JPEG magic bytes (FF D8 FF)', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    const jpeg = engine.renderFrameJpeg('default', 85)
+    // JPEG SOI marker: 0xFF 0xD8, followed by another marker starting with 0xFF.
+    expect(jpeg[0]).toBe(0xff)
+    expect(jpeg[1]).toBe(0xd8)
+    expect(jpeg[2]).toBe(0xff)
+  })
+
+  it('renderFrameJpeg output is smaller than the raw RGBA buffer', () => {
+    const width = 64
+    const height = 64
+    const engine = new RenderEngine({ width, height, enableGpu: false })
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    const jpeg = engine.renderFrameJpeg('default', 85)
+    const raw = engine.renderRaw('default')
+    // JPEG compression should produce a smaller file than raw RGBA for typical images.
+    expect(jpeg.length).toBeLessThan(raw.length)
+  })
+
+  it('renderFrameJpeg works with quality=1 (minimum) and quality=100 (maximum)', () => {
+    const engine = new RenderEngine({ width: 32, height: 32, enableGpu: false })
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    const lo = engine.renderFrameJpeg('default', 1)
+    const hi = engine.renderFrameJpeg('default', 100)
+    // Both must be valid JPEG streams.
+    expect(lo[0]).toBe(0xff)
+    expect(lo[1]).toBe(0xd8)
+    expect(hi[0]).toBe(0xff)
+    expect(hi[1]).toBe(0xd8)
+  })
+
+  // ── renderDepth ───────────────────────────────────────────────────────────
+
+  it('renderDepth returns a Uint8Array of length width * height * 4', () => {
+    const width = 64
+    const height = 64
+    const engine = new RenderEngine({ width, height, enableGpu: false })
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    const depth = engine.renderDepth('default')
+    expect(depth).toBeInstanceOf(Uint8Array)
+    // Depth32Float: 4 bytes per pixel.
+    expect(depth.length).toBe(width * height * 4)
+  })
+
+  it('renderDepth values are valid f32 in [0.0, 1.0]', () => {
+    const engine = new RenderEngine({ width: 16, height: 16, enableGpu: false })
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    const depth = engine.renderDepth('default')
+    const dv = new DataView(depth.buffer, depth.byteOffset, depth.byteLength)
+    for (let i = 0; i < depth.length / 4; i++) {
+      const v = dv.getFloat32(i * 4, true /* little-endian */)
+      expect(v).toBeGreaterThanOrEqual(0.0)
+      expect(v).toBeLessThanOrEqual(1.0)
+    }
+  })
+
+  it('clear-depth pixels are 1.0 (no geometry rendered)', () => {
+    // An empty scene should leave all depth values at the clear value (1.0).
+    const engine = new RenderEngine({ width: 8, height: 8, enableGpu: false })
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    const depth = engine.renderDepth('default')
+    const dv = new DataView(depth.buffer, depth.byteOffset, depth.byteLength)
+    for (let i = 0; i < depth.length / 4; i++) {
+      const v = dv.getFloat32(i * 4, true)
+      expect(v).toBeCloseTo(1.0, 5)
+    }
+  })
+
+  it('depth values are < 1.0 where geometry occludes the far plane', () => {
+    const engine = new RenderEngine({ width: 64, height: 64, enableGpu: false })
+    const id = engine.addPrimitive('cube')
+    engine.setTransform(id, [0, 0, 0], [0, 0, 0, 1])
+    engine.setCamera([0, 0, 3], [0, 0, 0], 60)
+    engine.addDirectionalLight([0, 0, -1], 0.8)
+    const depth = engine.renderDepth('default')
+    const dv = new DataView(depth.buffer, depth.byteOffset, depth.byteLength)
+    // Check the centre pixel – the cube should be there and closer than 1.0.
+    const cx = 32
+    const cy = 32
+    const centreDepth = dv.getFloat32((cy * 64 + cx) * 4, true)
+    expect(centreDepth).toBeLessThan(1.0)
   })
 })
