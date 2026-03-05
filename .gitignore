@@ -1,0 +1,19 @@
+# Rust build artifacts
+target/
+
+# Node.js
+node_modules/
+packages/*/node_modules/
+
+# napi-rs compiled native bindings (built in CI, not committed)
+*.node
+
+# TypeScript build output
+dist/
+
+# Jest cache
+coverage/
+
+# OS/editor
+.DS_Store
+*.swp
