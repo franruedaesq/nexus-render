@@ -45,7 +45,7 @@ jobs:
 
       - name: Build native module (debug)
         working-directory: packages/core
-        run: napi build --platform
+        run: napi build --platform --dts _generated.d.ts
 
       - name: Run Jest tests
         working-directory: packages/core

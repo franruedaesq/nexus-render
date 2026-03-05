@@ -14,6 +14,9 @@ dist/
 # Jest cache
 coverage/
 
+# napi-rs auto-generated dts (manually maintained index.d.ts is the canonical types file)
+packages/*/_generated.d.ts
+
 # OS/editor
 .DS_Store
 *.swp
